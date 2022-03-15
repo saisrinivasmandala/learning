@@ -1,0 +1,55 @@
+currentBuild.displayName = "simplejob-#"+currentBuild.number
+pipeline{
+    agent any
+    options { skipDefaultCheckout() }
+    environment{
+        PATH ="/opt/maven/bin:$PATH"
+    }
+    stages{
+        stage("git check"){
+            steps{
+                git credentialsId: 'git_id', url: 'https://github.com/sasigowda/hello-world'
+            }           
+        }
+        stage("maven build"){
+            steps{
+                sh "mvn clean package"
+            }
+        }
+        stage("deploy to tomcat dev server"){
+            steps{
+                 sshagent(['tomcat_deploy']) {
+                sh """
+                    scp -o StrictHostKeyChecking=no webapp/target/webapp.war ec2-user@172.31.38.119:/opt/tomcat/webapps/
+                    ssh ec2-user@172.31.38.119 /opt/tomcat/bin/startup.sh
+                    ssh ec2-user@172.31.38.119 /opt/tomcat/bin/shutdown.sh
+
+                """
+                }
+            }
+        }
+        stage("sharing artifactory to docker server"){
+            steps{
+                sshPublisher(publishers: [sshPublisherDesc(configName: 'docker', transfers: [sshTransfer(cleanRemote: false, excludes: '', execCommand: '', execTimeout: 120000, flatten: false, makeEmptyDirs: false, noDefaultExcludes: false, patternSeparator: '[, ]+', remoteDirectory: '/root/home/ansible/docker', remoteDirectorySDF: false, removePrefix: 'webapp/target', sourceFiles: 'webapp/target/*.war')], usePromotionTimestamp: false, useWorkspaceInPromotion: false, verbose: false)])
+            }
+        }    
+
+        stage("building docker images"){
+            steps{
+                sshPublisher(publishers: [sshPublisherDesc(configName: 'ansible', transfers: [sshTransfer(cleanRemote: false, excludes: '', execCommand: 'cd ~/home/ansible;ansible-playbook docker_build.yml', execTimeout: 120000, flatten: false, makeEmptyDirs: false, noDefaultExcludes: false, patternSeparator: '[, ]+', remoteDirectory: '', remoteDirectorySDF: false, removePrefix: '', sourceFiles: '')], usePromotionTimestamp: false, useWorkspaceInPromotion: false, verbose: false)])
+            }
+        }
+
+        stage("deploying docker container using custom hub image"){
+            steps{
+                sshPublisher(publishers: [sshPublisherDesc(configName: 'ansible', transfers: [sshTransfer(cleanRemote: false, excludes: '', execCommand: 'cd ~/home/ansible;ansible-playbook container_create.yml', execTimeout: 120000, flatten: false, makeEmptyDirs: false, noDefaultExcludes: false, patternSeparator: '[, ]+', remoteDirectory: '', remoteDirectorySDF: false, removePrefix: '', sourceFiles: '')], usePromotionTimestamp: false, useWorkspaceInPromotion: false, verbose: false)])
+            }
+        }
+
+        stage("email notification"){
+            steps{
+                emailext body: '${currentBuild.currentResult} : Job ${env.JOB_NAME} build ${env.BUILD_NUMBER} \\n More info at : ${env.BUILD_URL}', subject: 'Jenkins Build ${currentBuild.currentResult}: Job ${env.JOB_NAME}', to: 'sasidharan.21.2.1991@gmail.com'
+            }
+        }
+    }
+}
